@@ -1,11 +1,13 @@
 databases:
   - name: industrialdashboard-db
+    plan: free
     databaseName: industrialdashboard
     user: industrialdashboard
 
 services:
   - type: web
     name: industrialdashboard-api
+    plan: free
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT

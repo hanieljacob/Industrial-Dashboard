@@ -82,6 +82,7 @@ This repo now includes `render.yaml` and `requirements.txt` for Render deploymen
 4. After deploy, the API starts with:
    - `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
 5. `DATABASE_URL` is automatically injected from the Postgres service via `fromDatabase.connectionString`.
+6. Free-tier note: Render only allows one active free Postgres (and one free Redis) per workspace.
 
 ### Option B: Manual DB creation
 

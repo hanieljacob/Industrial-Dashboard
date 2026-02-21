@@ -288,6 +288,15 @@ export default function PlantStatus() {
     return (
       <Layout style={{ background: "#f5f6fa", minHeight: "100vh", padding: 24 }}>
         <Card style={{ margin: "0 auto", maxWidth: 720, width: "100%" }}>
+          {errorMessage ? (
+            <Alert
+              showIcon
+              type="error"
+              style={{ marginBottom: 16 }}
+              message="Failed to load facilities from API"
+              description={errorMessage}
+            />
+          ) : null}
           <Empty description="No facilities available. Check your API and seeded data." />
           <Typography.Paragraph copyable={{ text: API_BASE_URL }}>
             API base URL: <Typography.Text code>{API_BASE_URL}</Typography.Text>

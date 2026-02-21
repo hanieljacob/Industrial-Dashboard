@@ -46,6 +46,13 @@ Set database URL (optional if you use the default):
 export DATABASE_URL="postgresql://hanie@localhost:5432/postgres"
 ```
 
+Set allowed frontend origins for CORS (comma-separated).  
+If unset, no cross-origin browser access is allowed:
+
+```bash
+export CORS_ALLOW_ORIGINS="https://your-frontend.onrender.com"
+```
+
 Start the API:
 
 ```bash
@@ -55,6 +62,27 @@ uvicorn backend.main:app --reload
 Open API docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
+
+## Run frontend (Vite + React)
+
+The frontend uses Ant Design components for layout, controls, and status cards.
+
+```bash
+cd frontend
+npm install
+```
+
+Set API URL (optional, defaults to `http://127.0.0.1:8000`):
+
+```bash
+echo 'VITE_API_BASE_URL=https://industrialdashboard-api.onrender.com' > .env.local
+```
+
+Start frontend:
+
+```bash
+npm run dev
+```
 
 ## Backend structure
 
@@ -79,10 +107,18 @@ This repo now includes `render.yaml` and `requirements.txt` for Render deploymen
 3. Render will provision:
    - Postgres database: `industrialdashboard-db`
    - Web service: `industrialdashboard-api`
+   - Static web service: `industrialdashboard-frontend`
 4. After deploy, the API starts with:
    - `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
 5. `DATABASE_URL` is automatically injected from the Postgres service via `fromDatabase.connectionString`.
 6. Free-tier note: Render only allows one active free Postgres (and one free Redis) per workspace.
+7. Add `CORS_ALLOW_ORIGINS` in the API service environment variables, for example:
+   - `https://your-frontend.onrender.com`
+8. Frontend service gets `VITE_API_BASE_URL` from `render.yaml` pointing to:
+   - `https://industrialdashboard-api.onrender.com`
+9. If Render assigns different service URLs, update:
+   - API env var `CORS_ALLOW_ORIGINS`
+   - Frontend env var `VITE_API_BASE_URL`
 
 ### Option B: Manual DB creation
 

@@ -16,3 +16,16 @@ services:
         fromDatabase:
           name: industrialdashboard-db
           property: connectionString
+      - key: CORS_ALLOW_ORIGINS
+        value: https://industrialdashboard-frontend.onrender.com
+
+  - type: web
+    name: industrialdashboard-frontend
+    plan: free
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://industrialdashboard-api.onrender.com

@@ -175,8 +175,15 @@ def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
             SELECT
                 m.name AS metric_name,
                 m.unit,
+                CASE
+                    WHEN m.name IN ('power_kw', 'flow_l_min') THEN 'sum'
+                    ELSE 'avg'
+                END AS aggregation,
                 MAX(l.ts) AS latest_ts,
-                SUM(l.value) AS total_value,
+                CASE
+                    WHEN m.name IN ('power_kw', 'flow_l_min') THEN SUM(l.value)
+                    ELSE AVG(l.value)
+                END AS aggregated_value,
                 COUNT(*) AS contributing_assets
             FROM latest_per_asset_metric l
             JOIN metrics m ON m.id = l.metric_id
@@ -191,9 +198,10 @@ def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
         DashboardMetric(
             metric_name=row[0],
             unit=row[1],
-            latest_ts=row[2],
-            total_value=row[3],
-            contributing_assets=row[4],
+            aggregation=row[2],
+            latest_ts=row[3],
+            aggregated_value=row[4],
+            contributing_assets=row[5],
         )
         for row in rows
     ]

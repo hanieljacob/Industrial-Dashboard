@@ -53,6 +53,7 @@ export function fetchDashboardSummary(facilityId: number) {
 
 export function fetchSensorReadings(args: {
   facilityId: number;
+  assetId?: number;
   metricName?: string;
   start?: string;
   end?: string;
@@ -60,6 +61,7 @@ export function fetchSensorReadings(args: {
 }) {
   return apiGet<SensorReading[]>("/sensor-readings", {
     facility_id: args.facilityId,
+    asset_id: args.assetId,
     metric_name: args.metricName,
     start: args.start,
     end: args.end,

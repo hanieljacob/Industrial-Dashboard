@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, Typography } from "antd";
 import * as d3 from "d3";
 
@@ -11,6 +11,7 @@ const numberFormatter = new Intl.NumberFormat("en-US", {
 type TimeSeriesChartProps = {
   points: TimeSeriesPoint[];
   unit: string | null;
+  isDarkMode?: boolean;
 };
 
 type ChartDatum = {
@@ -18,8 +19,28 @@ type ChartDatum = {
   value: number;
 };
 
-export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) {
+type HoverDatum = {
+  ts: Date;
+  value: number;
+  xPct: number;
+  yPct: number;
+};
+
+const tooltipDateFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+export default function TimeSeriesChart({
+  points,
+  unit,
+  isDarkMode = false,
+}: TimeSeriesChartProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const [hoveredPoint, setHoveredPoint] = useState<HoverDatum | null>(null);
 
   const data = useMemo<ChartDatum[]>(
     () =>
@@ -34,6 +55,24 @@ export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) 
     if (!svgRef.current || data.length === 0) {
       return;
     }
+
+    const palette = isDarkMode
+      ? {
+          axisDomain: "#4b5563",
+          axisText: "#cbd5e1",
+          gridStroke: "#334155",
+          line: "#34d399",
+          lineArea: "rgba(52, 211, 153, 0.22)",
+          pointStroke: "#0b1220",
+        }
+      : {
+          axisDomain: "#c8cec9",
+          axisText: "#5f6b66",
+          gridStroke: "#d8ddd8",
+          line: "#1f7b69",
+          lineArea: "rgba(31, 123, 105, 0.18)",
+          pointStroke: "#ffffff",
+        };
 
     const width = 920;
     const height = 300;
@@ -71,7 +110,7 @@ export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) 
       .append("g")
       .call(yGridAxis)
       .call((g) => g.select(".domain").remove())
-      .call((g) => g.selectAll("line").attr("stroke", "#d8ddd8").attr("stroke-dasharray", "4 4"));
+      .call((g) => g.selectAll("line").attr("stroke", palette.gridStroke).attr("stroke-dasharray", "4 4"));
 
     chartRoot
       .append("g")
@@ -82,7 +121,7 @@ export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) 
           .tickFormat((value) => numberFormatter.format(Number(value))),
       )
       .call((g) => g.select(".domain").remove())
-      .call((g) => g.selectAll("text").attr("fill", "#5f6b66"));
+      .call((g) => g.selectAll("text").attr("fill", palette.axisText));
 
     const xAxis = d3
       .axisBottom(xScale)
@@ -101,9 +140,9 @@ export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) 
           selection: d3.Selection<SVGGElement, unknown, null, undefined>,
         ) => void,
       )
-      .call((g) => g.select(".domain").attr("stroke", "#c8cec9"))
-      .call((g) => g.selectAll("line").attr("stroke", "#c8cec9"))
-      .call((g) => g.selectAll("text").attr("fill", "#6a746f"));
+      .call((g) => g.select(".domain").attr("stroke", palette.axisDomain))
+      .call((g) => g.selectAll("line").attr("stroke", palette.axisDomain))
+      .call((g) => g.selectAll("text").attr("fill", palette.axisText));
 
     const areaGenerator = d3
       .area<ChartDatum>()
@@ -121,14 +160,14 @@ export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) 
     chartRoot
       .append("path")
       .datum(data)
-      .attr("fill", "rgba(31, 123, 105, 0.18)")
+      .attr("fill", palette.lineArea)
       .attr("d", areaGenerator);
 
     chartRoot
       .append("path")
       .datum(data)
       .attr("fill", "none")
-      .attr("stroke", "#1f7b69")
+      .attr("stroke", palette.line)
       .attr("stroke-linecap", "round")
       .attr("stroke-width", 3)
       .attr("d", lineGenerator);
@@ -138,11 +177,69 @@ export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) 
       .append("circle")
       .attr("cx", xScale(last.ts))
       .attr("cy", yScale(last.value))
-      .attr("fill", "#1f7b69")
+      .attr("fill", palette.line)
       .attr("r", 4.5)
-      .attr("stroke", "#ffffff")
+      .attr("stroke", palette.pointStroke)
       .attr("stroke-width", 2);
-  }, [data]);
+
+    const hoverGuide = chartRoot
+      .append("line")
+      .attr("stroke", palette.axisDomain)
+      .attr("stroke-dasharray", "4 4")
+      .attr("stroke-width", 1.5)
+      .style("display", "none");
+
+    const hoverPoint = chartRoot
+      .append("circle")
+      .attr("fill", palette.line)
+      .attr("r", 5)
+      .attr("stroke", palette.pointStroke)
+      .attr("stroke-width", 2.5)
+      .style("display", "none");
+
+    const bisectByTime = d3.bisector((d: ChartDatum) => d.ts.getTime()).center;
+
+    chartRoot
+      .append("rect")
+      .attr("width", plotWidth)
+      .attr("height", plotHeight)
+      .attr("fill", "transparent")
+      .style("cursor", "crosshair")
+      .on("mousemove", (event) => {
+        const [mx] = d3.pointer(event);
+        const clampedX = Math.max(0, Math.min(plotWidth, mx));
+        const hoveredTime = xScale.invert(clampedX).getTime();
+        const index = bisectByTime(data, hoveredTime);
+        const point = data[Math.max(0, Math.min(data.length - 1, index))];
+
+        const pointX = xScale(point.ts);
+        const pointY = yScale(point.value);
+
+        hoverGuide
+          .attr("x1", pointX)
+          .attr("x2", pointX)
+          .attr("y1", 0)
+          .attr("y2", plotHeight)
+          .style("display", null);
+
+        hoverPoint
+          .attr("cx", pointX)
+          .attr("cy", pointY)
+          .style("display", null);
+
+        setHoveredPoint({
+          ts: point.ts,
+          value: point.value,
+          xPct: ((margin.left + pointX) / width) * 100,
+          yPct: ((margin.top + pointY) / height) * 100,
+        });
+      })
+      .on("mouseleave", () => {
+        hoverGuide.style("display", "none");
+        hoverPoint.style("display", "none");
+        setHoveredPoint(null);
+      });
+  }, [data, isDarkMode]);
 
   if (data.length === 0) {
     return <Empty description="No points available for the selected metric" />;
@@ -157,18 +254,50 @@ export default function TimeSeriesChart({ points, unit }: TimeSeriesChartProps) 
         {unit ? ` ${unit}` : ""}
       </Typography.Text>
 
-      <svg
-        aria-label="Time series chart"
-        ref={svgRef}
-        style={{
-          background:
-            "linear-gradient(180deg, rgba(240, 248, 246, 0.55), rgba(255, 255, 255, 0.95))",
-          border: "1px solid #d9d9d9",
-          borderRadius: 12,
-          height: 280,
-          width: "100%",
-        }}
-      />
+      <div style={{ position: "relative" }}>
+        <svg
+          aria-label="Time series chart"
+          ref={svgRef}
+          style={{
+            background:
+              isDarkMode
+                ? "linear-gradient(180deg, rgba(15, 23, 32, 0.9), rgba(21, 30, 42, 0.98))"
+                : "linear-gradient(180deg, rgba(240, 248, 246, 0.55), rgba(255, 255, 255, 0.95))",
+            border: isDarkMode ? "1px solid #2b3646" : "1px solid #d9d9d9",
+            borderRadius: 12,
+            height: 280,
+            width: "100%",
+          }}
+        />
+        {hoveredPoint ? (
+          <div
+            style={{
+              background: isDarkMode ? "rgba(15, 23, 32, 0.96)" : "rgba(255, 255, 255, 0.96)",
+              border: isDarkMode ? "1px solid #334155" : "1px solid #d9d9d9",
+              borderRadius: 8,
+              boxShadow: isDarkMode
+                ? "0 6px 20px rgba(2, 6, 23, 0.45)"
+                : "0 6px 18px rgba(15, 23, 42, 0.16)",
+              color: isDarkMode ? "#e2e8f0" : "#1f2937",
+              fontSize: 12,
+              left: `${hoveredPoint.xPct}%`,
+              maxWidth: 220,
+              padding: "8px 10px",
+              pointerEvents: "none",
+              position: "absolute",
+              top: `${hoveredPoint.yPct}%`,
+              transform: "translate(-50%, calc(-100% - 10px))",
+              zIndex: 5,
+            }}
+          >
+            <div>{tooltipDateFormatter.format(hoveredPoint.ts)}</div>
+            <div>
+              <strong>{numberFormatter.format(hoveredPoint.value)}</strong>
+              {unit ? ` ${unit}` : ""}
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

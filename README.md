@@ -1,5 +1,11 @@
 # IndustrialDashboard
 
+## Live Demo
+
+- Frontend: `https://industrialdashboard-frontend.onrender.com`
+- API base: `https://industrialdashboard-api.onrender.com`
+- API docs: `https://industrialdashboard-api.onrender.com/docs`
+
 ## Requirements
 
 - Python 3.11+
@@ -53,6 +59,12 @@ If unset, no cross-origin browser access is allowed:
 export CORS_ALLOW_ORIGINS="https://your-frontend.onrender.com"
 ```
 
+Optional regex-based CORS allowlist:
+
+```bash
+export CORS_ALLOW_ORIGIN_REGEX="^https://industrialdashboard-frontend.*\\.onrender\\.com$"
+```
+
 Start the API:
 
 ```bash
@@ -65,7 +77,14 @@ Open API docs:
 
 ## Run frontend (Vite + React)
 
-The frontend uses Ant Design components for layout, controls, and status cards.
+The frontend uses Ant Design + D3 and includes:
+
+- facility and asset filters
+- metric cards for current plant status
+- custom datetime range picker + quick time-window presets
+- auto-refresh toggle (polling)
+- dark mode toggle
+- chart hover tooltip for exact point timestamp/value
 
 ```bash
 cd frontend
@@ -118,6 +137,7 @@ This repo now includes `render.yaml` and `requirements.txt` for Render deploymen
    - `https://industrialdashboard-api.onrender.com`
 9. If Render assigns different service URLs, update:
    - API env var `CORS_ALLOW_ORIGINS`
+   - API env var `CORS_ALLOW_ORIGIN_REGEX` (if needed)
    - Frontend env var `VITE_API_BASE_URL`
 
 ### Option B: Manual DB creation
@@ -158,11 +178,23 @@ Query params:
 Example:
 
 ```bash
-curl "http://127.0.0.1:8000/sensor-readings?facility_id=1&metric_name=power_kw&limit=20"
+curl "http://127.0.0.1:8000/sensor-readings?facility_id=1&asset_id=2&metric_name=power_kw&start=2026-02-23T00:00:00Z&end=2026-02-23T12:00:00Z&limit=200"
 ```
 
 ### `GET /facilities/{facility_id}/dashboard-summary`
-Returns facility-level dashboard summary using latest reading per asset+metric, then aggregates by metric.
+Returns facility-level dashboard summary using the latest reading per asset+metric, then aggregates by metric.
+
+Aggregation rules:
+- `sum` for additive metrics (`power_kw`, `flow_l_min`)
+- `avg` for state metrics (`temperature_c`, `pressure_bar`, `vibration_mm_s`)
+
+Response metric fields include:
+- `metric_name`
+- `unit`
+- `aggregation` (`sum` or `avg`)
+- `aggregated_value`
+- `latest_ts`
+- `contributing_assets`
 
 Example:
 

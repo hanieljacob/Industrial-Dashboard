@@ -37,8 +37,9 @@ class SensorReading(BaseModel):
 class DashboardMetric(BaseModel):
     metric_name: str
     unit: str | None
+    aggregation: str
     latest_ts: datetime
-    total_value: float
+    aggregated_value: float
     contributing_assets: int
 
 

@@ -32,8 +32,9 @@ export type SensorReading = {
 export type DashboardMetric = {
   metric_name: string;
   unit: string | null;
+  aggregation: "sum" | "avg" | string;
   latest_ts: string;
-  total_value: number;
+  aggregated_value: number;
   contributing_assets: number;
 };
 

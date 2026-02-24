@@ -33,6 +33,7 @@ export type DashboardMetric = {
   metric_name: string;
   unit: string | null;
   aggregation: "sum" | "avg" | string;
+  aggregation_values?: Record<string, number>;
   latest_ts: string;
   aggregated_value: number;
   contributing_assets: number;

@@ -1,15 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Empty, Typography } from "antd";
+import { Empty, Space, Tag, Typography } from "antd";
 import * as d3 from "d3";
 
-import type { TimeSeriesPoint } from "../types";
+import type { SensorReading, TimeSeriesPoint } from "../types";
 
 const numberFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+const ASSET_COLORS = [
+  "#3b82f6",
+  "#f97316",
+  "#8b5cf6",
+  "#06b6d4",
+  "#22c55e",
+  "#f43f5e",
+  "#a855f7",
+  "#eab308",
+  "#14b8a6",
+  "#ef4444",
+];
+
 type TimeSeriesChartProps = {
   points: TimeSeriesPoint[];
+  readings?: SensorReading[];
   unit: string | null;
   isDarkMode?: boolean;
 };
@@ -19,11 +33,27 @@ type ChartDatum = {
   value: number;
 };
 
+type AssetPointDatum = {
+  ts: Date;
+  value: number;
+  assetId: number;
+  assetName: string;
+  color: string;
+};
+
+type HoverAssetValue = {
+  assetId: number;
+  assetName: string;
+  color: string;
+  value: number;
+};
+
 type HoverDatum = {
   ts: Date;
   value: number;
   xPct: number;
   yPct: number;
+  assetValues: HoverAssetValue[];
 };
 
 const tooltipDateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -36,6 +66,7 @@ const tooltipDateFormatter = new Intl.DateTimeFormat("en-US", {
 
 export default function TimeSeriesChart({
   points,
+  readings = [],
   unit,
   isDarkMode = false,
 }: TimeSeriesChartProps) {
@@ -50,6 +81,77 @@ export default function TimeSeriesChart({
         .sort((a, b) => a.ts.getTime() - b.ts.getTime()),
     [points],
   );
+
+  const readingData = useMemo(
+    () =>
+      readings
+        .map((reading) => ({
+          ts: new Date(reading.ts),
+          value: reading.value,
+          assetId: reading.asset_id,
+          assetName: reading.asset_name,
+        }))
+        .filter((reading) => !Number.isNaN(reading.ts.getTime()))
+        .sort((a, b) => a.ts.getTime() - b.ts.getTime()),
+    [readings],
+  );
+
+  const assetColorById = useMemo(() => {
+    const ids = Array.from(new Set(readingData.map((reading) => reading.assetId))).sort(
+      (a, b) => a - b,
+    );
+    const colors = new Map<number, string>();
+
+    ids.forEach((id, index) => {
+      colors.set(id, ASSET_COLORS[index % ASSET_COLORS.length]);
+    });
+
+    return colors;
+  }, [readingData]);
+
+  const assetPoints = useMemo<AssetPointDatum[]>(
+    () =>
+      readingData.map((reading) => ({
+        ts: reading.ts,
+        value: reading.value,
+        assetId: reading.assetId,
+        assetName: reading.assetName,
+        color: assetColorById.get(reading.assetId) ?? ASSET_COLORS[0],
+      })),
+    [assetColorById, readingData],
+  );
+
+  const plottedAssetPoints = useMemo(() => {
+    const MAX_MARKERS = 1800;
+    if (assetPoints.length <= MAX_MARKERS) {
+      return assetPoints;
+    }
+
+    const step = Math.ceil(assetPoints.length / MAX_MARKERS);
+    return assetPoints.filter(
+      (_point, index) => index % step === 0 || index === assetPoints.length - 1,
+    );
+  }, [assetPoints]);
+
+  const assetLegend = useMemo(() => {
+    const seen = new Set<number>();
+    const items: Array<{ assetId: number; assetName: string; color: string }> = [];
+
+    for (const point of assetPoints) {
+      if (seen.has(point.assetId)) {
+        continue;
+      }
+
+      seen.add(point.assetId);
+      items.push({
+        assetId: point.assetId,
+        assetName: point.assetName,
+        color: point.color,
+      });
+    }
+
+    return items.sort((a, b) => a.assetName.localeCompare(b.assetName));
+  }, [assetPoints]);
 
   useEffect(() => {
     if (!svgRef.current || data.length === 0) {
@@ -93,8 +195,9 @@ export default function TimeSeriesChart({
     const minTime = extent[0] ?? data[0].ts;
     const maxTime = extent[1] ?? data[data.length - 1].ts;
 
-    const maxValue = d3.max(data, (d) => d.value) ?? 0;
-    const minValue = d3.min(data, (d) => d.value) ?? 0;
+    const allValues = [...data.map((d) => d.value), ...assetPoints.map((d) => d.value)];
+    const maxValue = d3.max(allValues) ?? 0;
+    const minValue = d3.min(allValues) ?? 0;
 
     const xScale = d3.scaleTime().domain([minTime, maxTime]).range([0, plotWidth]);
 
@@ -110,7 +213,9 @@ export default function TimeSeriesChart({
       .append("g")
       .call(yGridAxis)
       .call((g) => g.select(".domain").remove())
-      .call((g) => g.selectAll("line").attr("stroke", palette.gridStroke).attr("stroke-dasharray", "4 4"));
+      .call((g) =>
+        g.selectAll("line").attr("stroke", palette.gridStroke).attr("stroke-dasharray", "4 4"),
+      );
 
     chartRoot
       .append("g")
@@ -172,6 +277,19 @@ export default function TimeSeriesChart({
       .attr("stroke-width", 3)
       .attr("d", lineGenerator);
 
+    chartRoot
+      .append("g")
+      .selectAll("circle")
+      .data(plottedAssetPoints)
+      .join("circle")
+      .attr("cx", (d) => xScale(d.ts))
+      .attr("cy", (d) => yScale(d.value))
+      .attr("r", 2.6)
+      .attr("fill", (d) => d.color)
+      .attr("opacity", 0.9)
+      .attr("stroke", palette.pointStroke)
+      .attr("stroke-width", 0.7);
+
     const last = data[data.length - 1];
     chartRoot
       .append("circle")
@@ -198,6 +316,27 @@ export default function TimeSeriesChart({
       .style("display", "none");
 
     const bisectByTime = d3.bisector((d: ChartDatum) => d.ts.getTime()).center;
+    const assetValuesByTimestamp = new Map<number, HoverAssetValue[]>();
+
+    for (const point of assetPoints) {
+      const tsKey = point.ts.getTime();
+      const values = assetValuesByTimestamp.get(tsKey);
+      const nextValue = {
+        assetId: point.assetId,
+        assetName: point.assetName,
+        color: point.color,
+        value: point.value,
+      };
+      if (!values) {
+        assetValuesByTimestamp.set(tsKey, [nextValue]);
+      } else {
+        values.push(nextValue);
+      }
+    }
+
+    for (const values of assetValuesByTimestamp.values()) {
+      values.sort((a, b) => a.assetName.localeCompare(b.assetName));
+    }
 
     chartRoot
       .append("rect")
@@ -232,6 +371,7 @@ export default function TimeSeriesChart({
           value: point.value,
           xPct: ((margin.left + pointX) / width) * 100,
           yPct: ((margin.top + pointY) / height) * 100,
+          assetValues: assetValuesByTimestamp.get(point.ts.getTime()) ?? [],
         });
       })
       .on("mouseleave", () => {
@@ -239,18 +379,25 @@ export default function TimeSeriesChart({
         hoverPoint.style("display", "none");
         setHoveredPoint(null);
       });
-  }, [data, isDarkMode]);
+  }, [assetPoints, data, isDarkMode, plottedAssetPoints]);
 
   if (data.length === 0) {
     return <Empty description="No points available for the selected metric" />;
   }
 
   const latest = data[data.length - 1];
+  const tooltipTransform = hoveredPoint
+    ? hoveredPoint.xPct > 84
+      ? "translate(calc(-100% + 12px), calc(-100% - 10px))"
+      : hoveredPoint.xPct < 16
+        ? "translate(-12px, calc(-100% - 10px))"
+        : "translate(-50%, calc(-100% - 10px))"
+    : "translate(-50%, calc(-100% - 10px))";
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <Typography.Text type="secondary">
-        Latest: <Typography.Text strong>{numberFormatter.format(latest.value)}</Typography.Text>
+        Latest aggregate: <Typography.Text strong>{numberFormatter.format(latest.value)}</Typography.Text>
         {unit ? ` ${unit}` : ""}
       </Typography.Text>
 
@@ -281,23 +428,70 @@ export default function TimeSeriesChart({
               color: isDarkMode ? "#e2e8f0" : "#1f2937",
               fontSize: 12,
               left: `${hoveredPoint.xPct}%`,
-              maxWidth: 220,
+              maxWidth: 280,
               padding: "8px 10px",
               pointerEvents: "none",
               position: "absolute",
               top: `${hoveredPoint.yPct}%`,
-              transform: "translate(-50%, calc(-100% - 10px))",
+              transform: tooltipTransform,
               zIndex: 5,
             }}
           >
             <div>{tooltipDateFormatter.format(hoveredPoint.ts)}</div>
-            <div>
+            <div style={{ marginTop: 4 }}>
+              Aggregate:{" "}
               <strong>{numberFormatter.format(hoveredPoint.value)}</strong>
               {unit ? ` ${unit}` : ""}
             </div>
+            {hoveredPoint.assetValues.length ? (
+              <div style={{ marginTop: 6 }}>
+                {hoveredPoint.assetValues.map((assetValue) => (
+                  <div
+                    key={`${assetValue.assetId}-${assetValue.assetName}`}
+                    style={{ alignItems: "center", display: "flex", gap: 6, marginTop: 2 }}
+                  >
+                    <span
+                      style={{
+                        background: assetValue.color,
+                        borderRadius: "50%",
+                        display: "inline-block",
+                        height: 8,
+                        width: 8,
+                      }}
+                    />
+                    <span>{assetValue.assetName}:</span>
+                    <strong>{numberFormatter.format(assetValue.value)}</strong>
+                    <span>{unit ?? ""}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
+
+      {assetLegend.length ? (
+        <div>
+          <Typography.Text type="secondary">Asset markers</Typography.Text>
+          <Space size={[6, 6]} style={{ marginTop: 6 }} wrap>
+            {assetLegend.map((asset) => (
+              <Tag key={`${asset.assetId}-${asset.assetName}`}>
+                <span
+                  style={{
+                    background: asset.color,
+                    borderRadius: "50%",
+                    display: "inline-block",
+                    height: 8,
+                    marginRight: 6,
+                    width: 8,
+                  }}
+                />
+                {asset.assetName}
+              </Tag>
+            ))}
+          </Space>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -12,6 +12,12 @@ from backend.api.schemas import (
 )
 
 
+def _get_default_metric_aggregation(metric_name: str) -> str:
+    if metric_name in {"power_kw", "flow_l_min"}:
+        return "sum"
+    return "avg"
+
+
 def _get_facility_row(conn, facility_id: int):
     with conn.cursor() as cur:
         cur.execute(
@@ -175,16 +181,12 @@ def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
             SELECT
                 m.name AS metric_name,
                 m.unit,
-                CASE
-                    WHEN m.name IN ('power_kw', 'flow_l_min') THEN 'sum'
-                    ELSE 'avg'
-                END AS aggregation,
                 MAX(l.ts) AS latest_ts,
-                CASE
-                    WHEN m.name IN ('power_kw', 'flow_l_min') THEN SUM(l.value)
-                    ELSE AVG(l.value)
-                END AS aggregated_value,
-                COUNT(*) AS contributing_assets
+                COUNT(*) AS contributing_assets,
+                SUM(l.value) AS sum_value,
+                AVG(l.value) AS avg_value,
+                MIN(l.value) AS min_value,
+                MAX(l.value) AS max_value
             FROM latest_per_asset_metric l
             JOIN metrics m ON m.id = l.metric_id
             GROUP BY m.name, m.unit
@@ -194,17 +196,26 @@ def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
         )
         rows = cur.fetchall()
 
-    metrics = [
-        DashboardMetric(
-            metric_name=row[0],
-            unit=row[1],
-            aggregation=row[2],
-            latest_ts=row[3],
-            aggregated_value=row[4],
-            contributing_assets=row[5],
+    metrics: list[DashboardMetric] = []
+    for row in rows:
+        default_aggregation = _get_default_metric_aggregation(row[0])
+        aggregation_values = {
+            "sum": row[4],
+            "avg": row[5],
+            "min": row[6],
+            "max": row[7],
+        }
+        metrics.append(
+            DashboardMetric(
+                metric_name=row[0],
+                unit=row[1],
+                aggregation=default_aggregation,
+                aggregation_values=aggregation_values,
+                latest_ts=row[2],
+                aggregated_value=aggregation_values[default_aggregation],
+                contributing_assets=row[3],
+            )
         )
-        for row in rows
-    ]
     return DashboardSummary(
         facility_id=facility_id,
         generated_at=datetime.now(timezone.utc),

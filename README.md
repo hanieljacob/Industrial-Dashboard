@@ -6,33 +6,64 @@
 - API base: `https://industrialdashboard-api.onrender.com`
 - API docs: `https://industrialdashboard-api.onrender.com/docs`
 
-## Requirements
+## What This App Does
+
+Industrial facility monitoring dashboard with:
+
+- facility and asset modeling (`facilities`, `assets`, `metrics`, `sensor_readings`)
+- timestamped sensor readings queryable by facility, asset, metric, and time range
+- current plant status cards (latest-per-asset summary by metric)
+- per-card aggregation selector (`Total`, `Average`, `Minimum`, `Maximum`)
+- D3 time-series chart with:
+  - aggregated trend line
+  - per-asset marker dots (color-coded)
+  - tooltip showing aggregate value + original per-asset values at that timestamp
+- auto-refresh polling, custom datetime range picker, and dark mode
+
+## Tech Stack
+
+- Backend: FastAPI + psycopg (PostgreSQL)
+- Frontend: React + Vite + Ant Design + D3
+- Deployment: Render (Blueprint via `render.yaml`)
+
+## Local Development
+
+### 1. Prerequisites
 
 - Python 3.11+
-- PostgreSQL running locally (default: `localhost:5432`)
-- A PostgreSQL database you can write to (examples below use `postgres`)
+- Node.js 18+
+- PostgreSQL running locally (`localhost:5432`)
 
-Install backend dependencies:
+If `psql` shows `Connection refused`, start Postgres first.
 
-```bash
-pip install fastapi "uvicorn[standard]" "psycopg[binary]"
-```
+### 2. Install dependencies
 
-## Database setup
-
-Create schema:
+From repo root:
 
 ```bash
-psql -h localhost -U hanie -d postgres -f backend/init.sql
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Seed synthetic sample data (`facilities`, `assets`, `metrics`, `sensor_readings`):
+Frontend dependencies:
 
 ```bash
-psql -h localhost -U hanie -d postgres -f backend/seed_sample_data.sql
+cd frontend
+npm install
+cd ..
 ```
 
-Optional sample-data tuning (same `psql` session):
+### 3. Initialize database schema and sample data
+
+Use your local DB user and DB name (example uses `postgres` DB):
+
+```bash
+psql -h localhost -U <db_user> -d postgres -f backend/init.sql
+psql -h localhost -U <db_user> -d postgres -f backend/seed_sample_data.sql
+```
+
+Optional seed tuning in a single `psql` session:
 
 ```sql
 SET app.sample_hours_back = '72';
@@ -41,69 +72,100 @@ SET app.sample_step_minutes = '10';
 ```
 
 Notes:
-- `seed_sample_data.sql` truncates and recreates table data each run.
-- Generated timestamps stop at `now() - 1 minute` to avoid future-time conflicts.
 
-## Run backend API
+- `seed_sample_data.sql` truncates and recreates seeded data each run.
+- Synthetic timestamps stop at `now() - 1 minute` to avoid future-time check violations.
 
-Set database URL (optional if you use the default):
-
-```bash
-export DATABASE_URL="postgresql://hanie@localhost:5432/postgres"
-```
-
-Set allowed frontend origins for CORS (comma-separated).  
-If unset, no cross-origin browser access is allowed:
+### 4. Run backend API (Terminal A)
 
 ```bash
-export CORS_ALLOW_ORIGINS="https://your-frontend.onrender.com"
-```
-
-Optional regex-based CORS allowlist:
-
-```bash
-export CORS_ALLOW_ORIGIN_REGEX="^https://industrialdashboard-frontend.*\\.onrender\\.com$"
-```
-
-Start the API:
-
-```bash
+source .venv/bin/activate
+export DATABASE_URL="postgresql://<db_user>@localhost:5432/postgres"
+export CORS_ALLOW_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
 uvicorn backend.main:app --reload
 ```
 
-Open API docs:
-- Swagger UI: `http://127.0.0.1:8000/docs`
+API endpoints locally:
+
+- Swagger: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 
-## Run frontend (Vite + React)
-
-The frontend uses Ant Design + D3 and includes:
-
-- facility and asset filters
-- metric cards for current plant status
-- custom datetime range picker + quick time-window presets
-- auto-refresh toggle (polling)
-- dark mode toggle
-- chart hover tooltip for exact point timestamp/value
+### 5. Run frontend (Terminal B)
 
 ```bash
 cd frontend
-npm install
-```
-
-Set API URL (optional, defaults to `http://127.0.0.1:8000`):
-
-```bash
-echo 'VITE_API_BASE_URL=https://industrialdashboard-api.onrender.com' > .env.local
-```
-
-Start frontend:
-
-```bash
+echo 'VITE_API_BASE_URL=http://127.0.0.1:8000' > .env.local
 npm run dev
 ```
 
-## Backend structure
+Open: `http://localhost:5173`
+
+## Local Testing Checklist
+
+### API smoke tests
+
+```bash
+curl "http://127.0.0.1:8000/facilities"
+curl "http://127.0.0.1:8000/facilities/1"
+curl "http://127.0.0.1:8000/sensor-readings?facility_id=1&asset_id=2&metric_name=power_kw&start=2026-02-23T00:00:00Z&end=2026-02-23T12:00:00Z&limit=200"
+curl "http://127.0.0.1:8000/facilities/1/dashboard-summary"
+```
+
+For `/facilities/{id}/dashboard-summary`, each metric now includes:
+
+- `aggregation` (default display aggregation)
+- `aggregated_value` (value for that default)
+- `aggregation_values` object with `sum`, `avg`, `min`, `max`
+
+### Frontend behavior checks
+
+- Select a metric card: trend chart switches to that metric.
+- Change card aggregation dropdown: card value updates and trend aggregation updates.
+- Hover chart: tooltip shows aggregate value and per-asset original values.
+- Verify asset marker legend colors match chart marker colors.
+- Change facility/asset/time range and confirm data refreshes.
+
+### Build/lint checks
+
+```bash
+python3 -m compileall backend
+cd frontend && npm run lint && npm run build
+```
+
+## API Endpoints
+
+### `GET /facilities`
+Returns all facilities.
+
+### `GET /facilities/{facility_id}`
+Returns facility details including its assets.
+
+### `GET /sensor-readings`
+Returns sensor readings with optional filters.
+
+Query params:
+
+- `facility_id` (int)
+- `asset_id` (int)
+- `metric_name` (string)
+- `start` (ISO datetime)
+- `end` (ISO datetime)
+- `limit` (int, default `500`, max `5000`)
+
+### `GET /facilities/{facility_id}/dashboard-summary`
+Returns plant status from latest reading per `(asset_id, metric_id)`, aggregated by metric.
+
+Response per metric includes:
+
+- `metric_name`
+- `unit`
+- `aggregation`
+- `aggregated_value`
+- `aggregation_values` (`sum`, `avg`, `min`, `max`)
+- `latest_ts`
+- `contributing_assets`
+
+## Project Structure
 
 ```text
 backend/
@@ -113,91 +175,31 @@ backend/
     schemas.py         # Pydantic response models
     services.py        # Query/business logic
     routes.py          # HTTP routes
+frontend/
+  src/
+    components/
+      PlantStatus.tsx
+      TimeSeriesChart.tsx
 ```
 
-## Deploy on Render (Postgres + API)
+## Deploy on Render (Blueprint)
 
-This repo now includes `render.yaml` and `requirements.txt` for Render deployment.
+`render.yaml` provisions:
 
-### Option A: Blueprint deploy (recommended)
+- `industrialdashboard-db` (Postgres)
+- `industrialdashboard-api` (FastAPI web service)
+- `industrialdashboard-frontend` (static site)
 
-1. Push this repo to GitHub/GitLab.
-2. In Render, go to **New** -> **Blueprint** and select your repo.
-3. Render will provision:
-   - Postgres database: `industrialdashboard-db`
-   - Web service: `industrialdashboard-api`
-   - Static web service: `industrialdashboard-frontend`
-4. After deploy, the API starts with:
-   - `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
-5. `DATABASE_URL` is automatically injected from the Postgres service via `fromDatabase.connectionString`.
-6. Free-tier note: Render only allows one active free Postgres (and one free Redis) per workspace.
-7. Add `CORS_ALLOW_ORIGINS` in the API service environment variables, for example:
-   - `https://your-frontend.onrender.com`
-8. Frontend service gets `VITE_API_BASE_URL` from `render.yaml` pointing to:
-   - `https://industrialdashboard-api.onrender.com`
-9. If Render assigns different service URLs, update:
-   - API env var `CORS_ALLOW_ORIGINS`
-   - API env var `CORS_ALLOW_ORIGIN_REGEX` (if needed)
-   - Frontend env var `VITE_API_BASE_URL`
+After deploy:
 
-### Option B: Manual DB creation
-
-1. In Render, create a new **Postgres** service.
-2. In your API service, set `DATABASE_URL` to that database's **internal URL** (preferred for same-region Render services).
-
-### Initialize schema/data in Render Postgres
-
-From your database page in Render, open **Connect** and use the provided `psql` command (or external URL), then run:
+1. Confirm API env vars:
+   - `DATABASE_URL` (from DB service)
+   - `CORS_ALLOW_ORIGINS` includes frontend URL
+2. Confirm frontend env var:
+   - `VITE_API_BASE_URL` points to deployed API URL
+3. Initialize database:
 
 ```bash
 psql "<YOUR_RENDER_DATABASE_URL>" -f backend/init.sql
 psql "<YOUR_RENDER_DATABASE_URL>" -f backend/seed_sample_data.sql
-```
-
-If you connect from outside Render and hit SSL issues, use a modern PostgreSQL client with TLS 1.2+ as required by Render.
-
-## API endpoints
-
-### `GET /facilities`
-Returns all facilities.
-
-### `GET /facilities/{facility_id}`
-Returns one facility and all of its assets.
-
-### `GET /sensor-readings`
-Returns sensor readings with optional filters.
-
-Query params:
-- `facility_id` (int)
-- `asset_id` (int)
-- `metric_name` (string)
-- `start` (ISO datetime)
-- `end` (ISO datetime)
-- `limit` (int, default `500`, max `5000`)
-
-Example:
-
-```bash
-curl "http://127.0.0.1:8000/sensor-readings?facility_id=1&asset_id=2&metric_name=power_kw&start=2026-02-23T00:00:00Z&end=2026-02-23T12:00:00Z&limit=200"
-```
-
-### `GET /facilities/{facility_id}/dashboard-summary`
-Returns facility-level dashboard summary using the latest reading per asset+metric, then aggregates by metric.
-
-Aggregation rules:
-- `sum` for additive metrics (`power_kw`, `flow_l_min`)
-- `avg` for state metrics (`temperature_c`, `pressure_bar`, `vibration_mm_s`)
-
-Response metric fields include:
-- `metric_name`
-- `unit`
-- `aggregation` (`sum` or `avg`)
-- `aggregated_value`
-- `latest_ts`
-- `contributing_assets`
-
-Example:
-
-```bash
-curl "http://127.0.0.1:8000/facilities/1/dashboard-summary"
 ```

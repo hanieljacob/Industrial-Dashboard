@@ -38,6 +38,7 @@ class DashboardMetric(BaseModel):
     metric_name: str
     unit: str | None
     aggregation: str
+    aggregation_values: dict[str, float]
     latest_ts: datetime
     aggregated_value: float
     contributing_assets: int

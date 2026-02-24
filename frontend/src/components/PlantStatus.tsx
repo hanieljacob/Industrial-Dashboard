@@ -7,6 +7,7 @@ import {
   ConfigProvider,
   DatePicker,
   Empty,
+  Grid,
   Layout,
   Row,
   Select,
@@ -41,12 +42,21 @@ const DEFAULT_HISTORY_WINDOW_HOURS = 24;
 const MAX_CHART_POINTS = 180;
 const ALL_ASSETS_VALUE = 0;
 const DARK_MODE_STORAGE_KEY = "industrialdashboard_dark_mode";
+const AGGREGATION_KEYS = ["sum", "avg", "min", "max"] as const;
+type AggregationKey = (typeof AGGREGATION_KEYS)[number];
+const { useBreakpoint } = Grid;
 const TIME_WINDOW_OPTIONS = [
   { label: "Last 1 hour", value: 1 },
   { label: "Last 6 hours", value: 6 },
   { label: "Last 24 hours", value: 24 },
   { label: "Last 72 hours", value: 72 },
   { label: "Last 7 days", value: 168 },
+];
+const AGGREGATION_OPTIONS: Array<{ label: string; value: AggregationKey }> = [
+  { label: "Total", value: "sum" },
+  { label: "Average", value: "avg" },
+  { label: "Minimum", value: "min" },
+  { label: "Maximum", value: "max" },
 ];
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -83,6 +93,47 @@ function getAggregationLabel(aggregation: string) {
   return aggregation.toUpperCase();
 }
 
+function isAggregationKey(value: string): value is AggregationKey {
+  return AGGREGATION_KEYS.includes(value as AggregationKey);
+}
+
+function getMetricAggregationOptions(metric: DashboardMetric): AggregationKey[] {
+  const values = metric.aggregation_values ?? {};
+  const available = AGGREGATION_KEYS.filter((key) => values[key] !== undefined);
+
+  if (available.length) {
+    return available;
+  }
+
+  if (isAggregationKey(metric.aggregation)) {
+    return [metric.aggregation];
+  }
+
+  return ["avg"];
+}
+
+function getMetricDefaultAggregation(metric: DashboardMetric): AggregationKey {
+  const available = getMetricAggregationOptions(metric);
+  if (isAggregationKey(metric.aggregation) && available.includes(metric.aggregation)) {
+    return metric.aggregation;
+  }
+  return available[0];
+}
+
+function getMetricAggregationValue(
+  metric: DashboardMetric,
+  aggregation: AggregationKey,
+): number {
+  const value = metric.aggregation_values?.[aggregation];
+  if (value !== undefined) {
+    return value;
+  }
+  if (metric.aggregation === aggregation) {
+    return metric.aggregated_value;
+  }
+  return metric.aggregated_value;
+}
+
 function toErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message;
@@ -106,18 +157,46 @@ function getInitialDarkMode() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
-function buildTimeSeries(readings: SensorReading[]): TimeSeriesPoint[] {
-  const totalsByTimestamp = new Map<string, number>();
+function buildTimeSeries(
+  readings: SensorReading[],
+  aggregation: AggregationKey,
+): TimeSeriesPoint[] {
+  const valuesByTimestamp = new Map<
+    string,
+    { count: number; max: number; min: number; sum: number }
+  >();
 
   for (const reading of readings) {
-    totalsByTimestamp.set(
-      reading.ts,
-      (totalsByTimestamp.get(reading.ts) ?? 0) + reading.value,
-    );
+    const current = valuesByTimestamp.get(reading.ts);
+    if (!current) {
+      valuesByTimestamp.set(reading.ts, {
+        count: 1,
+        max: reading.value,
+        min: reading.value,
+        sum: reading.value,
+      });
+      continue;
+    }
+
+    current.count += 1;
+    current.sum += reading.value;
+    current.min = Math.min(current.min, reading.value);
+    current.max = Math.max(current.max, reading.value);
   }
 
-  const sortedPoints = Array.from(totalsByTimestamp.entries())
-    .map(([ts, value]) => ({ ts, value }))
+  const sortedPoints = Array.from(valuesByTimestamp.entries())
+    .map(([ts, aggregate]) => {
+      if (aggregation === "sum") {
+        return { ts, value: aggregate.sum };
+      }
+      if (aggregation === "avg") {
+        return { ts, value: aggregate.sum / aggregate.count };
+      }
+      if (aggregation === "min") {
+        return { ts, value: aggregate.min };
+      }
+      return { ts, value: aggregate.max };
+    })
     .sort((a, b) => a.ts.localeCompare(b.ts));
 
   if (sortedPoints.length <= MAX_CHART_POINTS) {
@@ -131,6 +210,9 @@ function buildTimeSeries(readings: SensorReading[]): TimeSeriesPoint[] {
 }
 
 export default function PlantStatus() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
+
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [selectedFacilityId, setSelectedFacilityId] = useState<number | null>(
     null,
@@ -139,6 +221,9 @@ export default function PlantStatus() {
     null,
   );
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [metricAggregations, setMetricAggregations] = useState<
+    Record<string, AggregationKey>
+  >({});
   const [selectedMetricName, setSelectedMetricName] = useState<string | null>(
     null,
   );
@@ -147,7 +232,7 @@ export default function PlantStatus() {
     DEFAULT_HISTORY_WINDOW_HOURS,
   );
   const [customTimeRange, setCustomTimeRange] = useState<[Date, Date] | null>(null);
-  const [trendPoints, setTrendPoints] = useState<TimeSeriesPoint[]>([]);
+  const [trendReadings, setTrendReadings] = useState<SensorReading[]>([]);
   const [refreshToken, setRefreshToken] = useState(0);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(getInitialDarkMode);
@@ -271,6 +356,21 @@ export default function PlantStatus() {
           }
           return nextSummary.metrics[0]?.metric_name ?? null;
         });
+        setMetricAggregations((previous) => {
+          const nextSelections: Record<string, AggregationKey> = {};
+
+          for (const metric of nextSummary.metrics) {
+            const previousSelection = previous[metric.metric_name];
+            const available = getMetricAggregationOptions(metric);
+            if (previousSelection && available.includes(previousSelection)) {
+              nextSelections[metric.metric_name] = previousSelection;
+              continue;
+            }
+            nextSelections[metric.metric_name] = getMetricDefaultAggregation(metric);
+          }
+
+          return nextSelections;
+        });
         setErrorMessage(null);
       } catch (error) {
         if (!active) return;
@@ -291,7 +391,7 @@ export default function PlantStatus() {
 
   useEffect(() => {
     if (selectedFacilityId === null || !selectedMetricName) {
-      setTrendPoints([]);
+      setTrendReadings([]);
       return;
     }
     const facilityId = selectedFacilityId;
@@ -317,12 +417,12 @@ export default function PlantStatus() {
         });
         if (!active) return;
 
-        setTrendPoints(buildTimeSeries(readings));
+        setTrendReadings(readings);
         setErrorMessage(null);
       } catch (error) {
         if (!active) return;
         setErrorMessage(toErrorMessage(error));
-        setTrendPoints([]);
+        setTrendReadings([]);
       } finally {
         if (active) {
           setIsTrendLoading(false);
@@ -348,6 +448,20 @@ export default function PlantStatus() {
     if (!summary || !selectedMetricName) return null;
     return summary.metrics.find((metric) => metric.metric_name === selectedMetricName) ?? null;
   }, [summary, selectedMetricName]);
+  const selectedMetricAggregation = useMemo(() => {
+    if (!selectedMetric) {
+      return null;
+    }
+    return (
+      metricAggregations[selectedMetric.metric_name] ??
+      getMetricDefaultAggregation(selectedMetric)
+    );
+  }, [metricAggregations, selectedMetric]);
+  const trendAggregation: AggregationKey = selectedMetricAggregation ?? "avg";
+  const trendPoints = useMemo(
+    () => buildTimeSeries(trendReadings, trendAggregation),
+    [trendAggregation, trendReadings],
+  );
   const assetOptions = useMemo(
     () => [
       { label: "All assets", value: ALL_ASSETS_VALUE },
@@ -370,6 +484,9 @@ export default function PlantStatus() {
     return `${dateTimeFormatter.format(customTimeRange[0])} - ${dateTimeFormatter.format(customTimeRange[1])}`;
   }, [customTimeRange, historyWindowHours]);
   const pageBackground = isDarkMode ? "#0f1720" : "#f5f6fa";
+  const trendTitle = selectedMetric
+    ? `${getMetricLabel(selectedMetric.metric_name)} Trend (${customTimeRange ? "custom range" : `last ${historyWindowHours}h`})`
+    : "Metric Trend";
   const appTheme = {
     algorithm: isDarkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: {
@@ -427,16 +544,13 @@ export default function PlantStatus() {
 
   return (
     <ConfigProvider theme={appTheme}>
-      <Layout style={{ background: pageBackground, minHeight: "100vh", padding: 24 }}>
+      <Layout style={{ background: pageBackground, minHeight: "100vh", padding: isMobile ? 12 : 24 }}>
         <Space direction="vertical" size="large" style={{ margin: "0 auto", width: "min(1200px, 100%)" }}>
           <Card>
-            <Row align="middle" gutter={[16, 16]} justify="space-between">
+            <Row align={isMobile ? "top" : "middle"} gutter={[16, 16]} justify="space-between">
               <Col flex="auto">
                 <Space direction="vertical" size={2}>
                   <Space align="center" size="middle">
-                    <span aria-label="industrial icon" role="img" style={{ fontSize: 24 }}>
-                      🏭
-                    </span>
                     <Typography.Title level={2} style={{ margin: 0 }}>
                       Plant Monitoring Dashboard
                     </Typography.Title>
@@ -446,22 +560,22 @@ export default function PlantStatus() {
                   </Typography.Text>
                 </Space>
               </Col>
-              <Col>
-                <Space wrap>
+              <Col style={isMobile ? { width: "100%" } : undefined}>
+                <Space style={isMobile ? { width: "100%" } : undefined} wrap>
                   <Select<number>
                     onChange={(value) => setSelectedFacilityId(value)}
                     options={facilities.map((facility) => ({
                       label: facility.name,
                       value: facility.id,
                     }))}
-                    style={{ minWidth: 260 }}
+                    style={isMobile ? { width: "100%" } : { minWidth: 260 }}
                     value={selectedFacilityId ?? undefined}
                   />
                   <Select<number>
                     disabled={!facilityDetails}
                     onChange={(value) => setSelectedAssetId(value)}
                     options={assetOptions}
-                    style={{ minWidth: 260 }}
+                    style={isMobile ? { width: "100%" } : { minWidth: 260 }}
                     value={selectedAssetId}
                   />
                   <Select<number>
@@ -470,12 +584,13 @@ export default function PlantStatus() {
                       setCustomTimeRange(null);
                     }}
                     options={TIME_WINDOW_OPTIONS}
-                    style={{ minWidth: 180 }}
+                    style={isMobile ? { width: "100%" } : { minWidth: 180 }}
                     value={historyWindowHours}
                   />
                   <DatePicker.RangePicker
                     allowClear
                     format="YYYY-MM-DD HH:mm"
+                    style={isMobile ? { width: "100%" } : undefined}
                     onChange={(value) => {
                       if (!value || !value[0] || !value[1]) {
                         setCustomTimeRange(null);
@@ -490,6 +605,7 @@ export default function PlantStatus() {
                   <Button
                     loading={isSummaryLoading || isTrendLoading}
                     onClick={() => setRefreshToken((previous) => previous + 1)}
+                    style={isMobile ? { width: "100%" } : undefined}
                     type="primary"
                   >
                     Refresh
@@ -518,12 +634,36 @@ export default function PlantStatus() {
           {errorMessage ? <Alert message={errorMessage} showIcon type="error" /> : null}
 
           <Card
-            title="Current Plant Status"
+            styles={{
+              body: { paddingTop: 20 },
+              header: { minHeight: "auto", paddingBottom: 14, paddingTop: 18 },
+            }}
+            title={
+              <Space align="center" size={10} wrap>
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  Current Plant Status
+                </Typography.Title>
+                <Typography.Text type="secondary">
+                  Tip: Click a metric card to update the time-series chart.
+                </Typography.Text>
+              </Space>
+            }
           >
             {summary?.metrics.length ? (
               <Row gutter={[12, 12]}>
                 {summary.metrics.map((metric) => {
                   const isActive = metric.metric_name === selectedMetricName;
+                  const selectedAggregation =
+                    metricAggregations[metric.metric_name] ??
+                    getMetricDefaultAggregation(metric);
+                  const displayedMetricValue = getMetricAggregationValue(
+                    metric,
+                    selectedAggregation,
+                  );
+                  const availableAggregations = getMetricAggregationOptions(metric);
+                  const dropdownOptions = AGGREGATION_OPTIONS.filter((option) =>
+                    availableAggregations.includes(option.value),
+                  );
                   return (
                     <Col key={metric.metric_name} lg={6} md={8} sm={12} xs={24}>
                       <Card
@@ -531,7 +671,7 @@ export default function PlantStatus() {
                         onClick={() => setSelectedMetricName(metric.metric_name)}
                         size="small"
                         style={{
-                          borderColor: isActive ? "#1677ff" : undefined,
+                          borderColor: isActive ? "#1f7b69" : undefined,
                           borderWidth: isActive ? 2 : undefined,
                           cursor: "pointer",
                         }}
@@ -539,11 +679,31 @@ export default function PlantStatus() {
                         <Statistic
                           precision={2}
                           title={getMetricLabel(metric.metric_name)}
-                          value={metric.aggregated_value}
+                          value={displayedMetricValue}
                         />
+                        <div
+                          onClick={(event) => event.stopPropagation()}
+                          style={{ marginTop: 10 }}
+                        >
+                          <Select<AggregationKey>
+                            onChange={(value) =>
+                              setMetricAggregations((previous) => ({
+                                ...previous,
+                                [metric.metric_name]: value,
+                              }))
+                            }
+                            options={dropdownOptions}
+                            size="small"
+                            style={{
+                              minWidth: isMobile ? undefined : 125,
+                              width: isMobile ? "100%" : undefined,
+                            }}
+                            value={selectedAggregation}
+                          />
+                        </div>
                         <Space size={6} style={{ marginTop: 8 }} wrap>
                           {metric.unit ? <Tag>{metric.unit}</Tag> : null}
-                          <Tag>{getAggregationLabel(metric.aggregation)}</Tag>
+                          <Tag>{getAggregationLabel(selectedAggregation)}</Tag>
                           <Tag>{metric.contributing_assets} assets</Tag>
                         </Space>
                         <Typography.Text style={{ display: "block", marginTop: 6 }} type="secondary">
@@ -562,23 +722,29 @@ export default function PlantStatus() {
           <Row gutter={[16, 16]}>
             <Col lg={24} xs={24}>
               <Card
+                styles={{
+                  body: { paddingTop: 20 },
+                  header: { minHeight: "auto", paddingBottom: 14, paddingTop: 18 },
+                }}
                 title={
-                  selectedMetric
-                    ? `${getMetricLabel(selectedMetric.metric_name)} Trend (${customTimeRange ? "custom range" : `last ${historyWindowHours}h`})`
-                    : "Metric Trend"
-                }
-                extra={
-                  <Space>
-                    <Tag color={autoRefreshEnabled ? "processing" : "default"}>
-                      {autoRefreshEnabled ? "Auto-refresh on (15s)" : "Auto-refresh off"}
-                    </Tag>
-                    <Tag>{timeRangeLabel}</Tag>
-                    <Tag>{selectedAssetLabel}</Tag>
-                    <Tag color={isDarkMode ? "blue" : "default"}>
-                      {isDarkMode ? "Dark mode" : "Light mode"}
-                    </Tag>
-                    {selectedMetric ? <Tag>{getAggregationLabel(selectedMetric.aggregation)}</Tag> : null}
-                    {selectedMetric ? <Tag>{selectedMetric.unit ?? "unitless"}</Tag> : null}
+                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                    <Typography.Title level={4} style={{ margin: 0 }}>
+                      {trendTitle}
+                    </Typography.Title>
+                    <Space size={[6, 6]} wrap>
+                      <Tag color={autoRefreshEnabled ? "processing" : "default"}>
+                        {autoRefreshEnabled ? "Auto-refresh on (15s)" : "Auto-refresh off"}
+                      </Tag>
+                      <Tag>{timeRangeLabel}</Tag>
+                      <Tag>{selectedAssetLabel}</Tag>
+                      <Tag color={isDarkMode ? "blue" : "default"}>
+                        {isDarkMode ? "Dark mode" : "Light mode"}
+                      </Tag>
+                      {selectedMetricAggregation ? (
+                        <Tag>{getAggregationLabel(selectedMetricAggregation)}</Tag>
+                      ) : null}
+                      {selectedMetric ? <Tag>{selectedMetric.unit ?? "unitless"}</Tag> : null}
+                    </Space>
                   </Space>
                 }
               >
@@ -587,6 +753,7 @@ export default function PlantStatus() {
                 ) : (
                   <TimeSeriesChart
                     points={trendPoints}
+                    readings={trendReadings}
                     unit={selectedMetric?.unit ?? null}
                     isDarkMode={isDarkMode}
                   />

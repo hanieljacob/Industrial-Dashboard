@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -37,13 +37,17 @@ import type {
 } from "../types";
 import TimeSeriesChart from "./TimeSeriesChart";
 
-const REFRESH_INTERVAL_MS = 15_000;
+const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const DEFAULT_HISTORY_WINDOW_HOURS = 24;
 const MAX_CHART_POINTS = 180;
 const ALL_ASSETS_VALUE = 0;
 const DARK_MODE_STORAGE_KEY = "industrialdashboard_dark_mode";
 const AGGREGATION_KEYS = ["sum", "avg", "min", "max"] as const;
 type AggregationKey = (typeof AGGREGATION_KEYS)[number];
+type TrendCursor = {
+  afterId: number;
+  afterTs: string;
+};
 const { useBreakpoint } = Grid;
 const TIME_WINDOW_OPTIONS = [
   { label: "Last 1 hour", value: 1 },
@@ -209,6 +213,66 @@ function buildTimeSeries(
   );
 }
 
+function compareCursorPosition(
+  leftTs: string,
+  leftId: number,
+  rightTs: string,
+  rightId: number,
+) {
+  const leftMs = Date.parse(leftTs);
+  const rightMs = Date.parse(rightTs);
+  const normalizedLeftMs = Number.isNaN(leftMs) ? 0 : leftMs;
+  const normalizedRightMs = Number.isNaN(rightMs) ? 0 : rightMs;
+  if (normalizedLeftMs !== normalizedRightMs) {
+    return normalizedLeftMs - normalizedRightMs;
+  }
+  return leftId - rightId;
+}
+
+function getLatestTrendCursor(readings: SensorReading[]): TrendCursor | null {
+  let latest: TrendCursor | null = null;
+
+  for (const reading of readings) {
+    if (
+      latest === null ||
+      compareCursorPosition(reading.ts, reading.id, latest.afterTs, latest.afterId) > 0
+    ) {
+      latest = { afterId: reading.id, afterTs: reading.ts };
+    }
+  }
+
+  return latest;
+}
+
+function mergeTrendReadings(
+  existingReadings: SensorReading[],
+  incomingReadings: SensorReading[],
+  windowStart: Date,
+  windowEnd: Date,
+) {
+  const windowStartMs = windowStart.getTime();
+  const windowEndMs = windowEnd.getTime();
+  const byId = new Map<number, SensorReading>();
+
+  for (const reading of existingReadings) {
+    const tsMs = Date.parse(reading.ts);
+    if (Number.isNaN(tsMs) || tsMs < windowStartMs || tsMs > windowEndMs) {
+      continue;
+    }
+    byId.set(reading.id, reading);
+  }
+
+  for (const reading of incomingReadings) {
+    const tsMs = Date.parse(reading.ts);
+    if (Number.isNaN(tsMs) || tsMs < windowStartMs || tsMs > windowEndMs) {
+      continue;
+    }
+    byId.set(reading.id, reading);
+  }
+
+  return Array.from(byId.values());
+}
+
 export default function PlantStatus() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -233,6 +297,7 @@ export default function PlantStatus() {
   );
   const [customTimeRange, setCustomTimeRange] = useState<[Date, Date] | null>(null);
   const [trendReadings, setTrendReadings] = useState<SensorReading[]>([]);
+  const trendCursorRef = useRef<TrendCursor | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(getInitialDarkMode);
@@ -248,7 +313,7 @@ export default function PlantStatus() {
 
     const timer = window.setInterval(() => {
       setRefreshToken((previous) => previous + 1);
-    }, REFRESH_INTERVAL_MS);
+    }, AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
   }, [autoRefreshEnabled]);
@@ -390,7 +455,18 @@ export default function PlantStatus() {
   }, [selectedFacilityId, refreshToken]);
 
   useEffect(() => {
+    trendCursorRef.current = null;
+  }, [
+    selectedFacilityId,
+    selectedMetricName,
+    selectedAssetId,
+    historyWindowHours,
+    customTimeRange,
+  ]);
+
+  useEffect(() => {
     if (selectedFacilityId === null || !selectedMetricName) {
+      trendCursorRef.current = null;
       setTrendReadings([]);
       return;
     }
@@ -406,6 +482,9 @@ export default function PlantStatus() {
       const start = customTimeRange
         ? customTimeRange[0]
         : new Date(end.getTime() - historyWindowHours * 60 * 60 * 1000);
+      const cursor = customTimeRange ? null : trendCursorRef.current;
+      const useCursor = !customTimeRange && refreshToken > 0 && cursor !== null;
+
       try {
         const readings = await fetchSensorReadings({
           facilityId,
@@ -413,11 +492,41 @@ export default function PlantStatus() {
           metricName,
           start: start.toISOString(),
           end: end.toISOString(),
+          afterTs: useCursor ? cursor.afterTs : undefined,
+          afterId: useCursor ? cursor.afterId : undefined,
           limit: 4000,
         });
         if (!active) return;
 
-        setTrendReadings(readings);
+        if (useCursor) {
+          setTrendReadings((previous) =>
+            mergeTrendReadings(previous, readings, start, end),
+          );
+        } else {
+          setTrendReadings(mergeTrendReadings([], readings, start, end));
+        }
+
+        if (customTimeRange) {
+          trendCursorRef.current = null;
+        } else {
+          const latestCursor = getLatestTrendCursor(readings);
+          if (latestCursor === null) {
+            if (!useCursor) {
+              trendCursorRef.current = null;
+            }
+          } else if (
+            trendCursorRef.current === null ||
+            compareCursorPosition(
+              latestCursor.afterTs,
+              latestCursor.afterId,
+              trendCursorRef.current.afterTs,
+              trendCursorRef.current.afterId,
+            ) > 0
+          ) {
+            trendCursorRef.current = latestCursor;
+          }
+        }
+
         setErrorMessage(null);
       } catch (error) {
         if (!active) return;
@@ -733,7 +842,9 @@ export default function PlantStatus() {
                     </Typography.Title>
                     <Space size={[6, 6]} wrap>
                       <Tag color={autoRefreshEnabled ? "processing" : "default"}>
-                        {autoRefreshEnabled ? "Auto-refresh on (15s)" : "Auto-refresh off"}
+                        {autoRefreshEnabled
+                          ? `Auto-refresh on (${AUTO_REFRESH_INTERVAL_MS / 1000}s)`
+                          : "Auto-refresh off"}
                       </Tag>
                       <Tag>{timeRangeLabel}</Tag>
                       <Tag>{selectedAssetLabel}</Tag>

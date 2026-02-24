@@ -89,10 +89,17 @@ def list_sensor_readings(
     metric_name: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    after_ts: datetime | None = None,
+    after_id: int | None = None,
     limit: int = 500,
 ) -> list[SensorReading]:
     if start and end and start > end:
         raise HTTPException(status_code=400, detail="start must be less than or equal to end")
+    if (after_ts is None) != (after_id is None):
+        raise HTTPException(
+            status_code=400,
+            detail="after_ts and after_id must be provided together",
+        )
 
     # Build only supported filters; values are still parameterized.
     filters: list[str] = []
@@ -118,7 +125,14 @@ def list_sensor_readings(
         filters.append("sr.ts <= %s")
         params.append(end)
 
+    if after_ts is not None and after_id is not None:
+        filters.append("(sr.ts > %s OR (sr.ts = %s AND sr.id > %s))")
+        params.extend([after_ts, after_ts, after_id])
+
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    order_clause = "ORDER BY sr.ts ASC, sr.id ASC"
+    if after_ts is None:
+        order_clause = "ORDER BY sr.ts DESC, sr.id DESC"
     query = f"""
         SELECT
             sr.id,
@@ -134,7 +148,7 @@ def list_sensor_readings(
         JOIN assets a ON a.id = sr.asset_id
         JOIN metrics m ON m.id = sr.metric_id
         {where_clause}
-        ORDER BY sr.ts DESC
+        {order_clause}
         LIMIT %s;
     """
     params.append(limit)

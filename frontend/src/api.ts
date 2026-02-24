@@ -8,6 +8,8 @@ import type {
 const rawApiBaseUrl =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 export const API_BASE_URL = rawApiBaseUrl.replace(/\/+$/, "");
+const dashboardSummaryEtagByFacility = new Map<number, string>();
+const dashboardSummaryCacheByFacility = new Map<number, DashboardSummary>();
 
 type QueryValue = string | number | undefined;
 
@@ -47,8 +49,41 @@ export function fetchFacilityDetails(facilityId: number) {
   return apiGet<FacilityDetails>(`/facilities/${facilityId}`);
 }
 
-export function fetchDashboardSummary(facilityId: number) {
-  return apiGet<DashboardSummary>(`/facilities/${facilityId}/dashboard-summary`);
+export async function fetchDashboardSummary(facilityId: number) {
+  const url = new URL(`${API_BASE_URL}/facilities/${facilityId}/dashboard-summary`);
+  const previousEtag = dashboardSummaryEtagByFacility.get(facilityId);
+  const headers: HeadersInit = { Accept: "application/json" };
+  if (previousEtag) {
+    headers["If-None-Match"] = previousEtag;
+  }
+
+  const response = await fetch(url.toString(), { headers });
+
+  if (response.status === 304) {
+    const cachedSummary = dashboardSummaryCacheByFacility.get(facilityId);
+    if (cachedSummary) {
+      return cachedSummary;
+    }
+    throw new Error(
+      `Request failed (304 Not Modified): missing cached summary for facility ${facilityId}`,
+    );
+  }
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(
+      `Request failed (${response.status} ${response.statusText}): ${message || "No response body"}`,
+    );
+  }
+
+  const etag = response.headers.get("ETag");
+  if (etag) {
+    dashboardSummaryEtagByFacility.set(facilityId, etag);
+  }
+
+  const summary = (await response.json()) as DashboardSummary;
+  dashboardSummaryCacheByFacility.set(facilityId, summary);
+  return summary;
 }
 
 export function fetchSensorReadings(args: {
@@ -57,6 +92,8 @@ export function fetchSensorReadings(args: {
   metricName?: string;
   start?: string;
   end?: string;
+  afterTs?: string;
+  afterId?: number;
   limit?: number;
 }) {
   return apiGet<SensorReading[]>("/sensor-readings", {
@@ -65,6 +102,8 @@ export function fetchSensorReadings(args: {
     metric_name: args.metricName,
     start: args.start,
     end: args.end,
+    after_ts: args.afterTs,
+    after_id: args.afterId,
     limit: args.limit ?? 500,
   });
 }

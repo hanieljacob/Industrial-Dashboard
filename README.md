@@ -150,10 +150,17 @@ Query params:
 - `metric_name` (string)
 - `start` (ISO datetime)
 - `end` (ISO datetime)
+- `after_ts` (ISO datetime, optional cursor; use with `after_id`)
+- `after_id` (int, optional cursor; use with `after_ts`)
 - `limit` (int, default `500`, max `5000`)
 
 ### `GET /facilities/{facility_id}/dashboard-summary`
 Returns plant status from latest reading per `(asset_id, metric_id)`, aggregated by metric.
+
+Conditional request support:
+
+- Send `If-None-Match` with the last `ETag` value.
+- Response is `304 Not Modified` (empty body) when summary data has not changed.
 
 Response per metric includes:
 
@@ -164,6 +171,72 @@ Response per metric includes:
 - `aggregation_values` (`sum`, `avg`, `min`, `max`)
 - `latest_ts`
 - `contributing_assets`
+
+## Data Flow Diagrams
+
+```mermaid
+flowchart LR
+  UI[Frontend: PlantStatus.tsx] -->|Initial| F1[/GET /facilities/]
+  UI -->|Facility change| F2[/GET /facilities/{id}/]
+  UI -->|Every 15s| S1[/GET /facilities/{id}/dashboard-summary<br/>If-None-Match: etag?/]
+  UI -->|Every 15s| S2[/GET /sensor-readings<br/>start,end,after_ts?,after_id?/]
+
+  S1 --> R[FastAPI routes.py]
+  S2 --> R
+  R --> SV[services.py]
+  SV --> DB[(PostgreSQL)]
+
+  S1 --> E1{ETag matches?}
+  E1 -->|Yes| E304[304 Not Modified]
+  E1 -->|No| E200[200 JSON + ETag]
+
+  S2 --> C1{Cursor provided?}
+  C1 -->|No| Q1[Full window read<br/>ORDER BY ts DESC,id DESC LIMIT]
+  C1 -->|Yes| Q2[Delta read<br/>WHERE ts > after_ts OR<br/>(ts=after_ts AND id>after_id)<br/>ORDER BY ts ASC,id ASC LIMIT]
+
+  E304 --> UI
+  E200 --> UI
+  Q1 --> UI
+  Q2 --> UI
+
+  UI --> M1[Trend merge + dedupe by id + trim to window]
+  UI --> M2[Update cursor after_ts/after_id]
+```
+
+```mermaid
+sequenceDiagram
+  participant U as Operator
+  participant FE as Frontend (PlantStatus)
+  participant API as FastAPI
+  participant DB as PostgreSQL
+
+  U->>FE: Open dashboard / choose metric
+  FE->>API: GET /sensor-readings (start,end) [initial]
+  API->>DB: Query full window
+  DB-->>API: rows
+  API-->>FE: rows
+  FE->>FE: set cursor (after_ts, after_id)
+
+  loop Every 15s
+    FE->>API: GET /dashboard-summary (If-None-Match)
+    API->>DB: Compute summary
+    DB-->>API: summary
+    alt Unchanged
+      API-->>FE: 304 Not Modified
+      FE->>FE: reuse cached summary
+    else Changed
+      API-->>FE: 200 + JSON + ETag
+      FE->>FE: update summary cache + etag
+    end
+
+    FE->>API: GET /sensor-readings (start,end,after_ts,after_id)
+    API->>DB: Delta query using cursor
+    DB-->>API: new rows only
+    API-->>FE: new rows
+    FE->>FE: merge + dedupe + trim
+    FE->>FE: advance cursor
+  end
+```
 
 ## Project Structure
 
@@ -180,26 +253,4 @@ frontend/
     components/
       PlantStatus.tsx
       TimeSeriesChart.tsx
-```
-
-## Deploy on Render (Blueprint)
-
-`render.yaml` provisions:
-
-- `industrialdashboard-db` (Postgres)
-- `industrialdashboard-api` (FastAPI web service)
-- `industrialdashboard-frontend` (static site)
-
-After deploy:
-
-1. Confirm API env vars:
-   - `DATABASE_URL` (from DB service)
-   - `CORS_ALLOW_ORIGINS` includes frontend URL
-2. Confirm frontend env var:
-   - `VITE_API_BASE_URL` points to deployed API URL
-3. Initialize database:
-
-```bash
-psql "<YOUR_RENDER_DATABASE_URL>" -f backend/init.sql
-psql "<YOUR_RENDER_DATABASE_URL>" -f backend/seed_sample_data.sql
 ```

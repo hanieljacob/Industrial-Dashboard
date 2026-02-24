@@ -176,31 +176,31 @@ Response per metric includes:
 
 ```mermaid
 flowchart LR
-  UI[Frontend: PlantStatus.tsx] -->|Initial| F1[/GET /facilities/]
-  UI -->|Facility change| F2[/GET /facilities/{id}/]
-  UI -->|Every 15s| S1[/GET /facilities/{id}/dashboard-summary<br/>If-None-Match: etag?/]
-  UI -->|Every 15s| S2[/GET /sensor-readings<br/>start,end,after_ts?,after_id?/]
+  UI["Frontend: PlantStatus.tsx"] -->|Initial| F1["GET /facilities"]
+  UI -->|Facility change| F2["GET /facilities/:facility_id"]
+  UI -->|Every 15s| S1["GET /facilities/:facility_id/dashboard-summary<br/>If-None-Match: etag?"]
+  UI -->|Every 15s| S2["GET /sensor-readings<br/>start,end,after_ts?,after_id?"]
 
-  S1 --> R[FastAPI routes.py]
+  S1 --> R["FastAPI routes.py"]
   S2 --> R
-  R --> SV[services.py]
+  R --> SV["services.py"]
   SV --> DB[(PostgreSQL)]
 
   S1 --> E1{ETag matches?}
-  E1 -->|Yes| E304[304 Not Modified]
-  E1 -->|No| E200[200 JSON + ETag]
+  E1 -->|Yes| E304["304 Not Modified"]
+  E1 -->|No| E200["200 JSON + ETag"]
 
   S2 --> C1{Cursor provided?}
-  C1 -->|No| Q1[Full window read<br/>ORDER BY ts DESC,id DESC LIMIT]
-  C1 -->|Yes| Q2[Delta read<br/>WHERE ts > after_ts OR<br/>(ts=after_ts AND id>after_id)<br/>ORDER BY ts ASC,id ASC LIMIT]
+  C1 -->|No| Q1["Full window read<br/>ORDER BY ts DESC,id DESC LIMIT"]
+  C1 -->|Yes| Q2["Delta read<br/>WHERE ts > after_ts OR<br/>(ts=after_ts AND id>after_id)<br/>ORDER BY ts ASC,id ASC LIMIT"]
 
   E304 --> UI
   E200 --> UI
   Q1 --> UI
   Q2 --> UI
 
-  UI --> M1[Trend merge + dedupe by id + trim to window]
-  UI --> M2[Update cursor after_ts/after_id]
+  UI --> M1["Trend merge + dedupe by id + trim to window"]
+  UI --> M2["Update cursor after_ts/after_id"]
 ```
 
 ```mermaid

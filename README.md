@@ -154,6 +154,11 @@ Query params:
 - `after_id` (int, optional cursor; use with `after_ts`)
 - `limit` (int, default `500`, max `5000`)
 
+Notes:
+
+- `limit` is a per-request cap.
+- Use `after_*` for forward/incremental refresh reads.
+
 ### `GET /facilities/{facility_id}/dashboard-summary`
 Returns plant status from latest reading per `(asset_id, metric_id)`, aggregated by metric.
 

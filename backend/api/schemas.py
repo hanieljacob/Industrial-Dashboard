@@ -1,9 +1,13 @@
+"""Pydantic response schemas used by API routes."""
+
 from datetime import datetime
 
 from pydantic import BaseModel
 
 
 class Facility(BaseModel):
+    """Facility metadata."""
+
     id: int
     name: str
     location: str | None
@@ -11,6 +15,8 @@ class Facility(BaseModel):
 
 
 class Asset(BaseModel):
+    """Asset metadata for one facility."""
+
     id: int
     facility_id: int
     name: str
@@ -19,10 +25,14 @@ class Asset(BaseModel):
 
 
 class FacilityDetails(Facility):
+    """Facility payload enriched with related assets."""
+
     assets: list[Asset]
 
 
 class SensorReading(BaseModel):
+    """Normalized sensor reading payload returned by query endpoints."""
+
     id: int
     facility_id: int
     asset_id: int
@@ -35,6 +45,8 @@ class SensorReading(BaseModel):
 
 
 class DashboardMetric(BaseModel):
+    """Aggregated metric values for dashboard status cards."""
+
     metric_name: str
     unit: str | None
     aggregation: str
@@ -45,6 +57,8 @@ class DashboardMetric(BaseModel):
 
 
 class DashboardSummary(BaseModel):
+    """Facility-level dashboard snapshot payload."""
+
     facility_id: int
     generated_at: datetime
     metrics: list[DashboardMetric]

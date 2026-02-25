@@ -40,6 +40,7 @@ import TimeSeriesChart from "./TimeSeriesChart";
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const DEFAULT_HISTORY_WINDOW_HOURS = 24;
 const MAX_CHART_POINTS = 180;
+const TREND_PAGE_LIMIT = 4_000;
 const ALL_ASSETS_VALUE = 0;
 const DARK_MODE_STORAGE_KEY = "industrialdashboard_dark_mode";
 const AGGREGATION_KEYS = ["sum", "avg", "min", "max"] as const;
@@ -494,8 +495,9 @@ export default function PlantStatus() {
           end: end.toISOString(),
           afterTs: useCursor ? cursor.afterTs : undefined,
           afterId: useCursor ? cursor.afterId : undefined,
-          limit: 4000,
+          limit: TREND_PAGE_LIMIT,
         });
+
         if (!active) return;
 
         if (useCursor) {
@@ -750,10 +752,11 @@ export default function PlantStatus() {
             title={
               <Space align="center" size={10} wrap>
                 <Typography.Title level={4} style={{ margin: 0 }}>
-                  Current Plant Status
+                  Current Plant Status (Latest Snapshot)
                 </Typography.Title>
                 <Typography.Text type="secondary">
-                  Tip: Click a metric card to update the time-series chart.
+                  Values are computed from each asset's latest reading per metric. Click a metric card
+                  to update the time-series chart.
                 </Typography.Text>
               </Space>
             }
@@ -816,7 +819,7 @@ export default function PlantStatus() {
                           <Tag>{metric.contributing_assets} assets</Tag>
                         </Space>
                         <Typography.Text style={{ display: "block", marginTop: 6 }} type="secondary">
-                          {dateTimeFormatter.format(new Date(metric.latest_ts))}
+                          Latest reading: {dateTimeFormatter.format(new Date(metric.latest_ts))}
                         </Typography.Text>
                       </Card>
                     </Col>

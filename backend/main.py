@@ -1,3 +1,5 @@
+"""FastAPI application bootstrap and middleware configuration."""
+
 import os
 
 from fastapi import FastAPI

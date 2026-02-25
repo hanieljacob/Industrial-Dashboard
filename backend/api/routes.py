@@ -1,3 +1,5 @@
+"""HTTP route definitions for facilities, sensor readings, and dashboard summary."""
+
 import hashlib
 import json
 from datetime import datetime
@@ -23,6 +25,7 @@ router = APIRouter()
 
 
 def _serialize_metric_for_etag(metric: DashboardMetric) -> dict[str, object]:
+    """Serialize a summary metric into a stable shape for ETag hashing."""
     ordered_aggregation_values = {
         key: metric.aggregation_values[key]
         for key in sorted(metric.aggregation_values.keys())
@@ -39,6 +42,7 @@ def _serialize_metric_for_etag(metric: DashboardMetric) -> dict[str, object]:
 
 
 def _build_dashboard_summary_etag(summary: DashboardSummary) -> str:
+    """Build a strong ETag value from summary content."""
     fingerprint = {
         "facility_id": summary.facility_id,
         "metrics": [_serialize_metric_for_etag(metric) for metric in summary.metrics],
@@ -49,6 +53,7 @@ def _build_dashboard_summary_etag(summary: DashboardSummary) -> str:
 
 
 def _normalize_etag_value(raw_value: str) -> str:
+    """Normalize weak/strong ETag forms into comparable token text."""
     value = raw_value.strip()
     if value.startswith("W/"):
         value = value[2:].strip()
@@ -56,6 +61,7 @@ def _normalize_etag_value(raw_value: str) -> str:
 
 
 def _etag_matches(if_none_match: str, current_etag: str) -> bool:
+    """Return True when an If-None-Match header contains the current ETag."""
     normalized_current = _normalize_etag_value(current_etag)
     candidates = [value.strip() for value in if_none_match.split(",")]
     for candidate in candidates:
@@ -70,12 +76,14 @@ def _etag_matches(if_none_match: str, current_etag: str) -> bool:
 
 @router.get("/facilities", response_model=list[Facility])
 def read_facilities() -> list[Facility]:
+    """Return all facilities ordered by identifier."""
     with get_connection() as conn:
         return list_facilities(conn)
 
 
 @router.get("/facilities/{facility_id}", response_model=FacilityDetails)
 def read_facility_details(facility_id: int) -> FacilityDetails:
+    """Return one facility with its associated assets."""
     with get_connection() as conn:
         return get_facility_details(conn, facility_id)
 
@@ -91,6 +99,7 @@ def read_sensor_readings(
     after_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=500, ge=1, le=5000),
 ) -> list[SensorReading]:
+    """Return sensor readings filtered by facility/asset/metric/time and optional cursor."""
     with get_connection() as conn:
         return list_sensor_readings(
             conn=conn,
@@ -115,6 +124,7 @@ def read_dashboard_summary(
     request: Request,
     response: Response,
 ) -> DashboardSummary | Response:
+    """Return dashboard summary with conditional response support via ETag."""
     with get_connection() as conn:
         summary = get_dashboard_summary(conn, facility_id)
 

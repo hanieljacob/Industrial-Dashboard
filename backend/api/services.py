@@ -1,3 +1,5 @@
+"""Database query and domain service functions for API handlers."""
+
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -13,12 +15,14 @@ from backend.api.schemas import (
 
 
 def _get_default_metric_aggregation(metric_name: str) -> str:
+    """Return the default aggregation type for a metric card."""
     if metric_name in {"power_kw", "flow_l_min"}:
         return "sum"
     return "avg"
 
 
 def _get_facility_row(conn, facility_id: int):
+    """Fetch one facility row or return None when it does not exist."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -32,6 +36,7 @@ def _get_facility_row(conn, facility_id: int):
 
 
 def list_facilities(conn) -> list[Facility]:
+    """Return all facilities from the data store."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -46,6 +51,7 @@ def list_facilities(conn) -> list[Facility]:
 
 
 def get_facility_details(conn, facility_id: int) -> FacilityDetails:
+    """Return one facility and all assets linked to it."""
     facility_row = _get_facility_row(conn, facility_id)
     if facility_row is None:
         raise HTTPException(status_code=404, detail=f"Facility {facility_id} not found")
@@ -93,6 +99,7 @@ def list_sensor_readings(
     after_id: int | None = None,
     limit: int = 500,
 ) -> list[SensorReading]:
+    """Return filtered sensor readings, optionally using a forward cursor."""
     if start and end and start > end:
         raise HTTPException(status_code=400, detail="start must be less than or equal to end")
     if (after_ts is None) != (after_id is None):
@@ -174,6 +181,7 @@ def list_sensor_readings(
 
 
 def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
+    """Return current per-metric status based on latest reading per asset/metric."""
     facility_row = _get_facility_row(conn, facility_id)
     if facility_row is None:
         raise HTTPException(status_code=404, detail=f"Facility {facility_id} not found")

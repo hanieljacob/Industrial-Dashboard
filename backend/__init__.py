@@ -1,1 +1,1 @@
-# Package marker for backend modules.
+"""Backend package for IndustrialDashboard API components."""

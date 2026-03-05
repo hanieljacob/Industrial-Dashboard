@@ -1,11 +1,14 @@
 """Database query and domain service functions for API handlers."""
 
+import random
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
 from backend.api.schemas import (
     Asset,
+    GenerateReadingsRequest,
+    GenerateReadingsResponse,
     DashboardMetric,
     DashboardSummary,
     Facility,
@@ -208,7 +211,9 @@ def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
                 SUM(l.value) AS sum_value,
                 AVG(l.value) AS avg_value,
                 MIN(l.value) AS min_value,
-                MAX(l.value) AS max_value
+                MAX(l.value) AS max_value,
+                percentile_cont(0.25) WITHIN GROUP (ORDER BY l.value) AS p25,
+                percentile_cont(0.75) WITHIN GROUP (ORDER BY l.value) AS p75
             FROM latest_per_asset_metric l
             JOIN metrics m ON m.id = l.metric_id
             GROUP BY m.name, m.unit
@@ -226,6 +231,8 @@ def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
             "avg": row[5],
             "min": row[6],
             "max": row[7],
+            "p25": row[8],
+            "p75": row[9]
         }
         metrics.append(
             DashboardMetric(
@@ -242,4 +249,98 @@ def get_dashboard_summary(conn, facility_id: int) -> DashboardSummary:
         facility_id=facility_id,
         generated_at=datetime.now(timezone.utc),
         metrics=metrics,
+    )
+
+
+def generate_sensor_readings(
+    conn,
+    payload: GenerateReadingsRequest,
+) -> GenerateReadingsResponse:
+    """Insert one synthetic reading per selected asset/metric pair."""
+    if payload.min_value > payload.max_value:
+        raise HTTPException(status_code=400, detail="min_value must be less than or equal to max_value")
+
+    metric_names = payload.metric_names or ["power_kw", "temperature_c"]
+
+    with conn.cursor() as cur:
+        if payload.asset_ids:
+            cur.execute(
+                """
+                SELECT id, facility_id
+                FROM assets
+                WHERE id = ANY(%s::bigint[])
+                ORDER BY id;
+                """,
+                (payload.asset_ids,),
+            )
+            asset_rows = cur.fetchall()
+            found_asset_ids = {row[0] for row in asset_rows}
+            missing_asset_ids = sorted(set(payload.asset_ids) - found_asset_ids)
+            if missing_asset_ids:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Assets not found: {missing_asset_ids}",
+                )
+        else:
+            cur.execute(
+                """
+                SELECT id, facility_id
+                FROM assets
+                ORDER BY id;
+                """
+            )
+            asset_rows = cur.fetchall()
+
+        if not asset_rows:
+            raise HTTPException(status_code=400, detail="No assets available to generate readings")
+
+        cur.execute(
+            """
+            SELECT id, name
+            FROM metrics
+            WHERE name = ANY(%s::text[])
+            ORDER BY id;
+            """,
+            (metric_names,),
+        )
+        metric_rows = cur.fetchall()
+
+        found_metric_names = {row[1] for row in metric_rows}
+        missing_metric_names = [name for name in metric_names if name not in found_metric_names]
+        if missing_metric_names:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Metrics not found: {missing_metric_names}",
+            )
+
+        timestamp = payload.timestamp or datetime.now(timezone.utc)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+        insert_rows: list[tuple[int, int, int, datetime, float]] = []
+        for asset_id, facility_id in asset_rows:
+            for metric_id, _metric_name in metric_rows:
+                insert_rows.append(
+                    (
+                        facility_id,
+                        asset_id,
+                        metric_id,
+                        timestamp,
+                        random.uniform(payload.min_value, payload.max_value),
+                    )
+                )
+
+        cur.executemany(
+            """
+            INSERT INTO sensor_readings (facility_id, asset_id, metric_id, ts, value)
+            VALUES (%s, %s, %s, %s, %s);
+            """,
+            insert_rows,
+        )
+
+    conn.commit()
+    return GenerateReadingsResponse(
+        status="inserted",
+        inserted=len(insert_rows),
+        timestamp=timestamp,
     )

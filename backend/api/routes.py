@@ -12,9 +12,12 @@ from backend.api.schemas import (
     DashboardSummary,
     Facility,
     FacilityDetails,
+    GenerateReadingsRequest,
+    GenerateReadingsResponse,
     SensorReading,
 )
 from backend.api.services import (
+    generate_sensor_readings,
     get_dashboard_summary,
     get_facility_details,
     list_facilities,
@@ -142,3 +145,12 @@ def read_dashboard_summary(
     response.headers["Cache-Control"] = "private, must-revalidate"
     response.headers["ETag"] = etag
     return summary
+
+
+@router.post("/generate-readings", response_model=GenerateReadingsResponse)
+def create_generated_readings(
+    payload: GenerateReadingsRequest | None = None,
+) -> GenerateReadingsResponse:
+    """Generate and insert synthetic sensor readings for selected assets/metrics."""
+    with get_connection() as conn:
+        return generate_sensor_readings(conn, payload or GenerateReadingsRequest())

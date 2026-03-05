@@ -49,3 +49,17 @@ export type TimeSeriesPoint = {
   ts: string;
   value: number;
 };
+
+export type GenerateReadingsRequest = {
+  asset_ids?: number[];
+  metric_names?: string[];
+  min_value?: number;
+  max_value?: number;
+  timestamp?: string;
+};
+
+export type GenerateReadingsResponse = {
+  status: string;
+  inserted: number;
+  timestamp: string;
+};

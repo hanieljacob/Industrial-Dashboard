@@ -62,3 +62,21 @@ class DashboardSummary(BaseModel):
     facility_id: int
     generated_at: datetime
     metrics: list[DashboardMetric]
+
+
+class GenerateReadingsRequest(BaseModel):
+    """Input payload for synthetic reading generation."""
+
+    asset_ids: list[int] | None = None
+    metric_names: list[str] | None = None
+    min_value: float = 10.0
+    max_value: float = 100.0
+    timestamp: datetime | None = None
+
+
+class GenerateReadingsResponse(BaseModel):
+    """Response payload for synthetic reading generation."""
+
+    status: str
+    inserted: int
+    timestamp: datetime

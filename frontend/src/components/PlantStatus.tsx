@@ -43,7 +43,7 @@ const MAX_CHART_POINTS = 180;
 const TREND_PAGE_LIMIT = 4_000;
 const ALL_ASSETS_VALUE = 0;
 const DARK_MODE_STORAGE_KEY = "industrialdashboard_dark_mode";
-const AGGREGATION_KEYS = ["sum", "avg", "min", "max"] as const;
+const AGGREGATION_KEYS = ["sum", "avg", "min", "max", "p25", "p75"] as const;
 type AggregationKey = (typeof AGGREGATION_KEYS)[number];
 type TrendCursor = {
   afterId: number;
@@ -62,6 +62,8 @@ const AGGREGATION_OPTIONS: Array<{ label: string; value: AggregationKey }> = [
   { label: "Average", value: "avg" },
   { label: "Minimum", value: "min" },
   { label: "Maximum", value: "max" },
+  { label: "P25", value: "p25"},
+  { label: "P75", value: "p75"}
 ];
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -105,6 +107,7 @@ function isAggregationKey(value: string): value is AggregationKey {
 function getMetricAggregationOptions(metric: DashboardMetric): AggregationKey[] {
   const values = metric.aggregation_values ?? {};
   const available = AGGREGATION_KEYS.filter((key) => values[key] !== undefined);
+  console.log(available)
 
   if (available.length) {
     return available;

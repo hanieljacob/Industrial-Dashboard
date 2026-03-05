@@ -2,6 +2,8 @@ import type {
   DashboardSummary,
   Facility,
   FacilityDetails,
+  GenerateReadingsRequest,
+  GenerateReadingsResponse,
   SensorReading,
 } from "./types";
 
@@ -39,6 +41,29 @@ async function apiGet<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+async function apiPost<TResponse, TBody extends object>(
+  path: string,
+  body: TBody,
+): Promise<TResponse> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(
+      `Request failed (${response.status} ${response.statusText}): ${message || "No response body"}`,
+    );
+  }
+
+  return response.json() as Promise<TResponse>;
 }
 
 export function fetchFacilities() {
@@ -106,4 +131,11 @@ export function fetchSensorReadings(args: {
     after_id: args.afterId,
     limit: args.limit ?? 500,
   });
+}
+
+export function generateReadings(payload: GenerateReadingsRequest = {}) {
+  return apiPost<GenerateReadingsResponse, GenerateReadingsRequest>(
+    "/generate-readings",
+    payload,
+  );
 }

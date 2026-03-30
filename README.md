@@ -1,11 +1,5 @@
 # IndustrialDashboard
 
-## Live Demo
-
-- Frontend: `https://industrialdashboard-frontend.onrender.com`
-- API base: `https://industrialdashboard-api.onrender.com`
-- API docs: `https://industrialdashboard-api.onrender.com/docs`
-
 ## What This App Does
 
 Industrial facility monitoring dashboard with:
